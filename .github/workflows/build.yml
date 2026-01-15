@@ -1,4 +1,4 @@
-name: Rclone Build (Entware IPK armv7-3.2)
+name: Rclone Entware IPK (armv7-3.2)
 
 on:
   workflow_dispatch:
@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   build_entware_ipk:
-    name: entware-ipk-armv7-3.2
+    name: build-ipk-armv7-3.2
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -31,28 +31,23 @@ jobs:
         shell: bash
         run: |
           sudo apt-get update
-          sudo apt-get install -y binutils tar gzip xz-utils
+          sudo apt-get install -y opkg-utils
 
-      - name: Build rclone and package Entware .ipk (canonical)
+      - name: Build rclone (linux/armv7)
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p build
 
-          # Pick an opkg-friendly version:
-          # - tag builds: use the tag
-          # - non-tag builds: use a debian-ish git version
+          # Versioning:
+          # - tags: use tag name
+          # - non-tags: use opkg-friendly version (NO "+")
           if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
             VER="${GITHUB_REF_NAME}"
           else
-            VER="0.0.0+git${GITHUB_SHA:0:7}"
+            VER="0.0.0-git${GITHUB_SHA:0:7}"
           fi
 
-          PKG="rclone"
-          ARCH="armv7-3.2"
-          OUT_IPK="build/${PKG}_${VER}_${ARCH}.ipk"
-
-          # Build static rclone binary for Entware (ARMv7)
           export GOOS=linux
           export GOARCH=arm
           export GOARM=7
@@ -64,51 +59,53 @@ jobs:
 
           chmod +x build/rclone
 
-          # Package root
-          PKGROOT="$(mktemp -d)"
-          mkdir -p "${PKGROOT}/opt/bin"
-          install -m 0755 build/rclone "${PKGROOT}/opt/bin/rclone"
+          echo "VER=${VER}" >> "$GITHUB_ENV"
 
-          INSTALLED_SIZE_KB="$(du -sk "${PKGROOT}/opt" | awk '{print $1}')"
+      - name: Package as Entware IPK using opkg-build
+        shell: bash
+        run: |
+          set -euo pipefail
 
-          # CONTROL dir (flat)
-          CTRLDIR="$(mktemp -d)"
-          printf '%s\n' \
-            "Package: ${PKG}" \
-            "Version: ${VER}" \
-            "Architecture: ${ARCH}" \
-            "Maintainer: doomwithdon" \
-            "Section: utils" \
-            "Priority: optional" \
-            "Installed-Size: ${INSTALLED_SIZE_KB}" \
-            "Description: rclone - rsync for cloud storage" \
-            " Rclone syncs files to and from cloud storage providers." \
-            > "${CTRLDIR}/control"
+          PKG="rclone"
+          ARCH="armv7-3.2"
+          VER="${VER}"
 
-          printf '%s\n' \
-            "#!/bin/sh" \
-            "set -e" \
-            "exit 0" \
-            > "${CTRLDIR}/postinst"
-          chmod 0755 "${CTRLDIR}/postinst"
+          PKGDIR="$(mktemp -d)"
+          mkdir -p "${PKGDIR}/CONTROL" "${PKGDIR}/opt/bin"
 
-          # Stage members with canonical filenames
-          STAGE="$(mktemp -d)"
-          printf '2.0\n' > "${STAGE}/debian-binary"
+          # Install payload
+          install -m 0755 build/rclone "${PKGDIR}/opt/bin/rclone"
 
-          # control.tar.gz with root entries "control" and "postinst" (no ./)
-          ( cd "${CTRLDIR}" && tar -czf "${STAGE}/control.tar.gz" control postinst )
+          # Installed size in KB (Entware/opkg expects KB)
+          INSTALLED_SIZE_KB="$(du -sk "${PKGDIR}/opt" | awk '{print $1}')"
 
-          # data.tar.gz with root entry "opt" (no ./)
-          ( cd "${PKGROOT}" && tar -czf "${STAGE}/data.tar.gz" opt )
+          # CONTROL/control (Entware-style)
+          cat > "${PKGDIR}/CONTROL/control" <<EOF
+Package: ${PKG}
+Version: ${VER}
+Architecture: ${ARCH}
+Maintainer: doomwithdon
+Section: utils
+Priority: optional
+Installed-Size: ${INSTALLED_SIZE_KB}
+Description: rclone - rsync for cloud storage
+ Rclone syncs files to and from cloud storage providers.
+EOF
 
-          # Create the .ipk with GNU ar from binutils, with exact member names
-          rm -f "${OUT_IPK}"
-          ( cd "${STAGE}" && ar r "${GITHUB_WORKSPACE}/${OUT_IPK}" debian-binary control.tar.gz data.tar.gz )
+          # Minimal postinst
+          cat > "${PKGDIR}/CONTROL/postinst" <<'EOF'
+#!/bin/sh
+set -e
+exit 0
+EOF
+          chmod 0755 "${PKGDIR}/CONTROL/postinst"
 
-          echo "Built IPK: ${OUT_IPK}"
-          echo "Members:"
-          ar t "${OUT_IPK}"
+          # Build ipk to ./build using opkg-build (canonical format)
+          mkdir -p build
+          opkg-build -o root -g root "${PKGDIR}" build
+
+          echo "Built IPKs:"
+          ls -lah build/*.ipk
 
       - name: Upload IPK Artifact
         uses: actions/upload-artifact@v4
@@ -118,24 +115,19 @@ jobs:
           retention-days: 7
 
   release:
-    name: Create Release (attach IPK)
+    name: Release (tags only)
     runs-on: ubuntu-latest
     needs: build_entware_ipk
     timeout-minutes: 15
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
       - name: Download IPK Artifact
         uses: actions/download-artifact@v4
         with:
           name: rclone-entware-ipk-armv7-3.2
           path: build
 
-      - name: Create/Update GitHub Release and upload .ipk (tags only)
+      - name: Create/Update GitHub Release and upload .ipk
         if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ github.token }}
