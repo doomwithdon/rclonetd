@@ -31,7 +31,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           mkdir -p build
 
           export GOOS=linux
@@ -39,29 +38,23 @@ jobs:
           export GOARM=7
           export CGO_ENABLED=0
 
-          # Build rclone binary
           go build -v -trimpath \
             -ldflags "-s -w -X github.com/rclone/rclone/fs.Version=${{ github.ref_name }}" \
             -o build/rclone .
 
           chmod +x build/rclone
 
-          # Package metadata
           PKG="rclone"
           VER="${{ github.ref_name }}"
           ARCH="armv7sf-k3.2"
           OUT_IPK="build/${PKG}_${VER}_${ARCH}.ipk"
 
-          # Create package root
           PKGROOT="$(mktemp -d)"
           mkdir -p "${PKGROOT}/CONTROL" "${PKGROOT}/opt/bin"
-
           install -m 0755 build/rclone "${PKGROOT}/opt/bin/rclone"
 
           INSTALLED_SIZE_KB="$(du -sk "${PKGROOT}/opt" | awk '{print $1}')"
 
-          # CONTROL/control (no heredoc; avoids YAML parser issues)
-          CONTROL_FILE="${PKGROOT}/CONTROL/control"
           printf '%s\n' \
             "Package: ${PKG}" \
             "Version: ${VER}" \
@@ -72,18 +65,15 @@ jobs:
             "Installed-Size: ${INSTALLED_SIZE_KB}" \
             "Description: rclone - rsync for cloud storage" \
             " Rclone syncs files to and from cloud storage providers." \
-            > "${CONTROL_FILE}"
+            > "${PKGROOT}/CONTROL/control"
 
-          # Optional postinst
-          POSTINST="${PKGROOT}/CONTROL/postinst"
           printf '%s\n' \
             "#!/bin/sh" \
             "set -e" \
             "exit 0" \
-            > "${POSTINST}"
-          chmod 0755 "${POSTINST}"
+            > "${PKGROOT}/CONTROL/postinst"
+          chmod 0755 "${PKGROOT}/CONTROL/postinst"
 
-          # Build ipk parts with EXACT member names
           STAGE="$(mktemp -d)"
           printf '%s' "2.0" > "${STAGE}/debian-binary"
           ( cd "${PKGROOT}/CONTROL" && tar -czf "${STAGE}/control.tar.gz" . )
@@ -111,13 +101,26 @@ jobs:
     timeout-minutes: 15
 
     steps:
+      # ✅ REQUIRED so gh has a .git repo context
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch tags
+        shell: bash
+        run: |
+          git fetch --force --tags
+
       - name: Download IPK Artifact
         uses: actions/download-artifact@v4
         with:
           name: rclone-entware-ipk-armv7sf-k3.2
           path: build
 
-      - name: Create/Update GitHub Release and upload .ipk
+      # ✅ Only create a release when this run is for a tag
+      - name: Create/Update GitHub Release and upload .ipk (tags only)
+        if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -137,3 +140,11 @@ jobs:
               --notes "Entware installable .ipk for ASUS Merlin (armv7sf-k3.2)." \
               "${FILE}"
           fi
+
+      # Optional: for workflow_dispatch on main, just show where the file is (artifact already uploaded)
+      - name: Manual run note (no release on non-tags)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        shell: bash
+        run: |
+          echo "Not a tag build (${GITHUB_REF}). Skipping GitHub Release. Artifact is uploaded."
+          ls -lah build || true
