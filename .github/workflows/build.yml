@@ -1,226 +1,137 @@
-name: Rclone Build
+name: Rclone Build (Entware IPK armv7sf-k3.2)
 
 on:
   workflow_dispatch:
   push:
-
-env:
-  IMAGE: doomwithdon/rclonetd
+    tags:
+      - "*"
 
 permissions:
   contents: write
-  packages: write
 
 jobs:
-  build:
-    timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        job_name:
-          - linux
-          - windows
-          - mac_amd64
-          - mac_arm64
-          - asus_merlin_entware_armv7
-
-        include:
-          - job_name: linux
-            os: ubuntu-latest
-            go: ">=1.23.0"
-            gotags: cmount
-            cgo: "0"
-            build_flags: '-include "^(linux/amd64|linux/arm64|linux/arm-v7)"'
-
-          - job_name: windows
-            os: windows-latest
-            go: ">=1.23.0"
-            gotags: cmount
-            cgo: "0"
-            build_flags: '-include "^(windows/amd64|windows/arm64)"'
-            build_args: "-buildmode exe"
-
-          - job_name: mac_amd64
-            os: macos-latest
-            go: ">=1.23.0"
-            gotags: "cmount"
-            build_flags: '-include "^darwin/amd64" -cgo'
-
-          - job_name: mac_arm64
-            os: macos-latest
-            go: ">=1.23.0"
-            gotags: "cmount"
-            build_flags: '-include "^darwin/arm64" -cgo -macos-arch arm64 -cgo-cflags=-I/usr/local/include -cgo-ldflags=-L/usr/local/lib'
-
-          # ✅ NEW: ASUS XT8 Merlin Entware ARMv7 build
-          - job_name: asus_merlin_entware_armv7
-            os: ubuntu-latest
-            go: ">=1.23.0"
-            gotags: ""
-            cgo: "0"
-
-    name: ${{ matrix.job_name }}
-    runs-on: ${{ matrix.os }}
+  build_entware_ipk:
+    name: entware-ipk-armv7sf-k3.2
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Install Go
         uses: actions/setup-go@v5
         with:
-          go-version: ${{ matrix.go }}
+          go-version: ">=1.23.0"
           check-latest: true
 
-      - name: Set environment variables
+      - name: Print Go version
         shell: bash
         run: |
-          echo 'GOTAGS=${{ matrix.gotags }}' >> $GITHUB_ENV
-          echo 'BUILD_FLAGS=${{ matrix.build_flags }}' >> $GITHUB_ENV
-          echo 'BUILD_ARGS=${{ matrix.build_args }}' >> $GITHUB_ENV
-          if [[ "${{ matrix.cgo }}" != "" ]]; then echo 'CGO_ENABLED=${{ matrix.cgo }}' >> $GITHUB_ENV ; fi
-
-      - name: Install Libraries on Linux
-        shell: bash
-        run: |
-          sudo modprobe fuse
-          sudo chmod 666 /dev/fuse
-          sudo chown root:$USER /etc/fuse.conf
-          sudo apt-get update
-          sudo apt-get install -y fuse3 libfuse-dev rpm pkg-config git-annex git-annex-remote-rclone nfs-common
-        if: matrix.os == 'ubuntu-latest' && matrix.job_name != 'asus_merlin_entware_armv7'
-
-      - name: Install Libraries on macOS
-        shell: bash
-        run: |
-          unset HOMEBREW_NO_INSTALL_FROM_API
-          brew untap --force homebrew/core
-          brew untap --force homebrew/cask
-          brew update
-          brew install --cask macfuse
-          brew install git-annex git-annex-remote-rclone
-        if: matrix.os == 'macos-latest'
-
-      - name: Install Libraries on Windows
-        shell: powershell
-        run: |
-          $ProgressPreference = 'SilentlyContinue'
-          choco install -y winfsp
-          choco install zip --source="bin"
-          echo "CPATH=C:\Program Files\WinFsp\inc\fuse;C:\Program Files (x86)\WinFsp\inc\fuse" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          if ($env:GOARCH -eq "386") {
-            choco install -y mingw --forcex86 --force
-            echo "C:\\ProgramData\\chocolatey\\lib\\mingw\\tools\\install\\mingw32\\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          }
-          $path = (get-command mingw32-make.exe).Path
-          Copy-Item -Path $path -Destination (Join-Path (Split-Path -Path $path) 'make.exe')
-        if: matrix.os == 'windows-latest'
-
-      - name: Print Go version and environment
-        shell: bash
-        run: |
-          printf "Using go at: $(which go)\n"
-          printf "Go version: $(go version)\n"
-          printf "\n\nGo environment:\n\n"
+          which go
+          go version
           go env
-          printf "\n\nSystem environment:\n\n"
-          env
 
-      # ✅ Default build (existing cross builds)
-      - name: Build rclone (default matrix builds)
+      - name: Build rclone + generate Entware .ipk (armv7sf-k3.2)
         shell: bash
         run: |
-          if [[ "${{ matrix.os }}" == "ubuntu-latest" ]]; then make release_dep_linux ; fi
-          make cross
-        if: matrix.job_name != 'asus_merlin_entware_armv7'
+          set -euo pipefail
 
-      # ✅ NEW: Entware binary build for Asus XT8 (ARMv7)
-      - name: Build rclone for ASUS Merlin Entware (ARMv7)
-        shell: bash
-        run: |
           mkdir -p build
+
+          # Build static rclone binary for Entware (ARMv7)
           export GOOS=linux
           export GOARCH=arm
           export GOARM=7
           export CGO_ENABLED=0
 
-          # Build a single Entware-friendly static binary
+          BIN_OUT="build/rclone"
           go build -v -trimpath \
             -ldflags "-s -w -X github.com/rclone/rclone/fs.Version=${{ github.ref_name }}" \
-            -o build/rclone-linux-armv7-entware .
+            -o "${BIN_OUT}" .
 
-          # Optional: show binary info
-          file build/rclone-linux-armv7-entware || true
+          chmod +x "${BIN_OUT}"
+
+          # ---------------------------
+          # Package into an Entware .ipk
+          # ---------------------------
+          PKG="rclone"
+          VER="${{ github.ref_name }}"
+          ARCH="armv7sf-k3.2"   # per your request
+
+          PKGROOT="$(mktemp -d)"
+          mkdir -p "${PKGROOT}/CONTROL"
+          mkdir -p "${PKGROOT}/opt/bin"
+
+          # Install path for Entware
+          install -m 0755 "${BIN_OUT}" "${PKGROOT}/opt/bin/rclone"
+
+          # Installed size in KB
+          INSTALLED_SIZE_KB="$(du -sk "${PKGROOT}/opt" | awk '{print $1}')"
+
+          # Control metadata
+          cat > "${PKGROOT}/CONTROL/control" <<EOF
+          Package: ${PKG}
+          Version: ${VER}
+          Architecture: ${ARCH}
+          Maintainer: doomwithdon
+          Section: utils
+          Priority: optional
+          Installed-Size: ${INSTALLED_SIZE_KB}
+          Description: rclone - rsync for cloud storage
+           Rclone syncs files to and from cloud storage providers.
+          EOF
+
+          # Minimal postinst (optional)
+          cat > "${PKGROOT}/CONTROL/postinst" <<'EOF'
+          #!/bin/sh
+          set -e
+          if [ -x /opt/bin/rclone ]; then
+            /opt/bin/rclone version >/dev/null 2>&1 || true
+          fi
+          exit 0
+          EOF
+          chmod 0755 "${PKGROOT}/CONTROL/postinst"
+
+          # debian-binary required by .ipk format
+          echo "2.0" > "${PKGROOT}/debian-binary"
+
+          # control.tar.gz must contain control files at archive root
+          ( cd "${PKGROOT}/CONTROL" && tar -czf "${PKGROOT}/control.tar.gz" . )
+
+          # data.tar.gz must contain opt/... at archive root
+          ( cd "${PKGROOT}" && tar -czf "${PKGROOT}/data.tar.gz" opt )
+
+          OUT_IPK="build/${PKG}_${VER}_${ARCH}.ipk"
+
+          # .ipk is an ar archive of the three parts
+          ar r "${OUT_IPK}" \
+            "${PKGROOT}/debian-binary" \
+            "${PKGROOT}/control.tar.gz" \
+            "${PKGROOT}/data.tar.gz"
+
+          echo "Built:"
           ls -lah build/
-        if: matrix.job_name == 'asus_merlin_entware_armv7'
+          file "${OUT_IPK}" || true
 
-      - name: Upload Binary
+      - name: Upload IPK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: rclone-${{ matrix.job_name }}
-          path: ${{ github.workspace }}/build/**/*
-          retention-days: 1
-
-  android:
-    timeout-minutes: 30
-    name: "android-all"
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: ">=1.23.0"
-
-      - name: Go module cache
-        uses: actions/cache@v4
-        with:
-          path: ~/go/pkg/mod
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-
-
-      - name: arm64-v8a Set environment variables
-        shell: bash
-        run: |
-          echo "CC=$(echo $ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang)" >> $GITHUB_ENV
-          echo "CC_FOR_TARGET=$CC" >> $GITHUB_ENV
-          echo 'GOOS=android' >> $GITHUB_ENV
-          echo 'GOARCH=arm64' >> $GITHUB_ENV
-          echo 'CGO_ENABLED=1' >> $GITHUB_ENV
-          echo 'CGO_LDFLAGS=-fuse-ld=lld -s -w' >> $GITHUB_ENV
-
-      - name: arm64-v8a build
-        run: go build -v -tags android -trimpath -ldflags '-s -X github.com/rclone/rclone/fs.Version='${{ github.ref_name }} -o build/rclone-armv8a .
-
-      - name: Package into Zip
-        run: |
-          cd build
-          mv rclone-armv8a rclone
-          zip -r rclone-${{ github.ref_name }}-android-arm64.zip rclone
-
-      - name: Upload Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: rclone-android
-          path: ${{ github.workspace }}/build/rclone-*.zip
-          retention-days: 1
-
-  
+          name: rclone-entware-ipk-armv7sf-k3.2
+          path: build/*.ipk
+          retention-days: 7
 
   release:
-    name: Create Release
+    name: Create Release (attach IPK)
     runs-on: ubuntu-latest
-    needs: [build, android]
+    needs: [build_entware_ipk]
+    timeout-minutes: 15
+
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
@@ -230,24 +141,29 @@ jobs:
           git fetch --force --tags
           git describe --tags --always || true
 
-      - name: Download All Artifacts
+      - name: Download IPK Artifact
         uses: actions/download-artifact@v4
         with:
-          path: /tmp/build
-          pattern: rclone-*
-          merge-multiple: true
+          name: rclone-entware-ipk-armv7sf-k3.2
+          path: build
 
-      - name: Copy Artifacts
-        run: |
-          mkdir build
-          cp -r /tmp/build/* build/
-
-      - name: Upload Assets
-        shell: bash
+      - name: Create GitHub Release and upload .ipk
         env:
           GH_TOKEN: ${{ github.token }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          REPO: ${{ github.repository }}
-          GH_REPO: ${{ github.repository }}
+        shell: bash
         run: |
-          make upload_github
+          set -euo pipefail
+          TAG="${{ github.ref_name }}"
+          FILE="$(ls -1 build/*.ipk | head -n 1)"
+
+          # Create release if it doesn't exist, otherwise just upload asset(s)
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            echo "Release ${TAG} already exists. Uploading asset..."
+            gh release upload "${TAG}" "${FILE}" --clobber
+          else
+            echo "Creating release ${TAG}..."
+            gh release create "${TAG}" \
+              --title "rclone ${TAG} (Entware IPK armv7sf-k3.2)" \
+              --notes "Entware installable .ipk for ASUS Merlin (armv7sf-k3.2)." \
+              "${FILE}"
+          fi
