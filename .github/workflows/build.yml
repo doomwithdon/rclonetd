@@ -1,4 +1,4 @@
-name: Rclone Build (Entware IPK armv7sf-k3.2)
+name: Rclone Build (Entware IPK armv7-3.2)
 
 on:
   workflow_dispatch:
@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   build_entware_ipk:
-    name: entware-ipk-armv7sf-k3.2
+    name: entware-ipk-armv7-3.2
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -27,34 +27,52 @@ jobs:
           go-version: ">=1.23.0"
           check-latest: true
 
-      - name: Build rclone and package .ipk
+      - name: Install packaging tools
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y binutils tar gzip xz-utils
+
+      - name: Build rclone and package Entware .ipk (canonical)
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p build
 
+          # Pick an opkg-friendly version:
+          # - tag builds: use the tag
+          # - non-tag builds: use a debian-ish git version
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            VER="${GITHUB_REF_NAME}"
+          else
+            VER="0.0.0+git${GITHUB_SHA:0:7}"
+          fi
+
+          PKG="rclone"
+          ARCH="armv7-3.2"
+          OUT_IPK="build/${PKG}_${VER}_${ARCH}.ipk"
+
+          # Build static rclone binary for Entware (ARMv7)
           export GOOS=linux
           export GOARCH=arm
           export GOARM=7
           export CGO_ENABLED=0
 
           go build -v -trimpath \
-            -ldflags "-s -w -X github.com/rclone/rclone/fs.Version=${{ github.ref_name }}" \
+            -ldflags "-s -w -X github.com/rclone/rclone/fs.Version=${VER}" \
             -o build/rclone .
 
           chmod +x build/rclone
 
-          PKG="rclone"
-          VER="${{ github.ref_name }}"
-          ARCH="armv7sf-k3.2"
-          OUT_IPK="build/${PKG}_${VER}_${ARCH}.ipk"
-
+          # Package root
           PKGROOT="$(mktemp -d)"
-          mkdir -p "${PKGROOT}/CONTROL" "${PKGROOT}/opt/bin"
+          mkdir -p "${PKGROOT}/opt/bin"
           install -m 0755 build/rclone "${PKGROOT}/opt/bin/rclone"
 
           INSTALLED_SIZE_KB="$(du -sk "${PKGROOT}/opt" | awk '{print $1}')"
 
+          # CONTROL dir (flat)
+          CTRLDIR="$(mktemp -d)"
           printf '%s\n' \
             "Package: ${PKG}" \
             "Version: ${VER}" \
@@ -65,32 +83,37 @@ jobs:
             "Installed-Size: ${INSTALLED_SIZE_KB}" \
             "Description: rclone - rsync for cloud storage" \
             " Rclone syncs files to and from cloud storage providers." \
-            > "${PKGROOT}/CONTROL/control"
+            > "${CTRLDIR}/control"
 
           printf '%s\n' \
             "#!/bin/sh" \
             "set -e" \
             "exit 0" \
-            > "${PKGROOT}/CONTROL/postinst"
-          chmod 0755 "${PKGROOT}/CONTROL/postinst"
+            > "${CTRLDIR}/postinst"
+          chmod 0755 "${CTRLDIR}/postinst"
 
+          # Stage members with canonical filenames
           STAGE="$(mktemp -d)"
-          printf '%s' "2.0" > "${STAGE}/debian-binary"
-          ( cd "${PKGROOT}/CONTROL" && tar -czf "${STAGE}/control.tar.gz" . )
+          printf '2.0\n' > "${STAGE}/debian-binary"
+
+          # control.tar.gz with root entries "control" and "postinst" (no ./)
+          ( cd "${CTRLDIR}" && tar -czf "${STAGE}/control.tar.gz" control postinst )
+
+          # data.tar.gz with root entry "opt" (no ./)
           ( cd "${PKGROOT}" && tar -czf "${STAGE}/data.tar.gz" opt )
 
+          # Create the .ipk with GNU ar from binutils, with exact member names
           rm -f "${OUT_IPK}"
           ( cd "${STAGE}" && ar r "${GITHUB_WORKSPACE}/${OUT_IPK}" debian-binary control.tar.gz data.tar.gz )
 
-          echo "Built:"
-          ls -lah build/
-          echo "IPK members:"
+          echo "Built IPK: ${OUT_IPK}"
+          echo "Members:"
           ar t "${OUT_IPK}"
 
       - name: Upload IPK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: rclone-entware-ipk-armv7sf-k3.2
+          name: rclone-entware-ipk-armv7-3.2
           path: build/*.ipk
           retention-days: 7
 
@@ -101,24 +124,17 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      # ✅ REQUIRED so gh has a .git repo context
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Fetch tags
-        shell: bash
-        run: |
-          git fetch --force --tags
-
       - name: Download IPK Artifact
         uses: actions/download-artifact@v4
         with:
-          name: rclone-entware-ipk-armv7sf-k3.2
+          name: rclone-entware-ipk-armv7-3.2
           path: build
 
-      # ✅ Only create a release when this run is for a tag
       - name: Create/Update GitHub Release and upload .ipk (tags only)
         if: startsWith(github.ref, 'refs/tags/')
         env:
@@ -126,25 +142,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           TAG="${{ github.ref_name }}"
           FILE="$(ls -1 build/*.ipk | head -n 1)"
 
           if gh release view "${TAG}" >/dev/null 2>&1; then
-            echo "Release exists, uploading asset..."
             gh release upload "${TAG}" "${FILE}" --clobber
           else
-            echo "Creating release..."
             gh release create "${TAG}" \
-              --title "rclone ${TAG} (Entware IPK armv7sf-k3.2)" \
-              --notes "Entware installable .ipk for ASUS Merlin (armv7sf-k3.2)." \
+              --title "rclone ${TAG} (Entware IPK armv7-3.2)" \
+              --notes "Entware installable .ipk for ASUS Merlin (armv7-3.2)." \
               "${FILE}"
           fi
-
-      # Optional: for workflow_dispatch on main, just show where the file is (artifact already uploaded)
-      - name: Manual run note (no release on non-tags)
-        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
-        shell: bash
-        run: |
-          echo "Not a tag build (${GITHUB_REF}). Skipping GitHub Release. Artifact is uploaded."
-          ls -lah build || true
