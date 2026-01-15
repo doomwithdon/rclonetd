@@ -78,7 +78,9 @@ jobs:
           ARCH="armv7-3.2"
           SOURCE_URL="https://github.com/${GITHUB_REPOSITORY}"
 
-          PKGDIR="$(mktemp -d)"
+          # Build package directory inside workspace (avoids /tmp root-only perms issues)
+          PKGDIR="${GITHUB_WORKSPACE}/_pkg"
+          rm -rf "${PKGDIR}"
           mkdir -p "${PKGDIR}/CONTROL" "${PKGDIR}/opt/bin"
 
           install -m 0755 build/rclone "${PKGDIR}/opt/bin/rclone"
@@ -105,11 +107,16 @@ jobs:
             > "${PKGDIR}/CONTROL/postinst"
           chmod 0755 "${PKGDIR}/CONTROL/postinst"
 
-          # Make opkg-build happy about UID/GID
-          sudo chown -R 0:0 "${PKGDIR}"
-
           echo "PKGDIR=${PKGDIR}"
           find "${PKGDIR}" -maxdepth 3 -print
+
+          # Make opkg-build happy about UID/GID, but keep readable for subsequent steps
+          sudo chown -R 0:0 "${PKGDIR}"
+          sudo chmod 0755 "${PKGDIR}"
+          sudo chmod -R a+rX "${PKGDIR}"
+
+          echo "PKGDIR (after chown):"
+          sudo find "${PKGDIR}" -maxdepth 3 -print
 
           mkdir -p build
           /tmp/opkg-utils/opkg-build "${PKGDIR}" build
