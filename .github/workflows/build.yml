@@ -246,19 +246,8 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          REPO: ${{ github.repository }}
+          GH_REPO: ${{ github.repository }}
         run: |
           make upload_github
-
-      - name: Copy Artifacts
-        run: |
-          mkdir build
-          cp -r /tmp/build/* build/
-
-      - name: Upload Assets
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          make upload_github
-
-    
