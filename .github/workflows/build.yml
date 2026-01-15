@@ -90,44 +90,61 @@ jobs:
       - name: Upload IPK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: rclone-entware-ipk-armv7sf-k3.2.ipk
+          name: rclone-entware-ipk-armv7sf-k3.2
           path: build/*.ipk
           retention-days: 7
 
   release:
-    name: Create Release
+    name: Create Release (attach IPK)
     runs-on: ubuntu-latest
-    needs: [build, android]
+    needs: build_entware_ipk
+    timeout-minutes: 15
+
     steps:
+      # ✅ REQUIRED so gh has a .git repo context
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Ensure tags are available
+      - name: Fetch tags
         shell: bash
         run: |
           git fetch --force --tags
-          git describe --tags --always || true
 
-      - name: Download All Artifacts
+      - name: Download IPK Artifact
         uses: actions/download-artifact@v4
         with:
-          path: /tmp/build
-          pattern: rclone-*
-          merge-multiple: true
+          name: rclone-entware-ipk-armv7sf-k3.2
+          path: build
 
-      - name: Copy Artifacts
-        run: |
-          mkdir build
-          cp -r /tmp/build/* build/
-
-      - name: Upload Assets
-        shell: bash
+      # ✅ Only create a release when this run is for a tag
+      - name: Create/Update GitHub Release and upload .ipk (tags only)
+        if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ github.token }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          REPO: ${{ github.repository }}
-          GH_REPO: ${{ github.repository }}
+        shell: bash
         run: |
-          make upload_github
+          set -euo pipefail
+
+          TAG="${{ github.ref_name }}"
+          FILE="$(ls -1 build/*.ipk | head -n 1)"
+
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            echo "Release exists, uploading asset..."
+            gh release upload "${TAG}" "${FILE}" --clobber
+          else
+            echo "Creating release..."
+            gh release create "${TAG}" \
+              --title "rclone ${TAG} (Entware IPK armv7sf-k3.2)" \
+              --notes "Entware installable .ipk for ASUS Merlin (armv7sf-k3.2)." \
+              "${FILE}"
+          fi
+
+      # Optional: for workflow_dispatch on main, just show where the file is (artifact already uploaded)
+      - name: Manual run note (no release on non-tags)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        shell: bash
+        run: |
+          echo "Not a tag build (${GITHUB_REF}). Skipping GitHub Release. Artifact is uploaded."
+          ls -lah build || true
