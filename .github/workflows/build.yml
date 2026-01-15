@@ -27,17 +27,11 @@ jobs:
           go-version: ">=1.23.0"
           check-latest: true
 
-      - name: Print Go version
-        shell: bash
-        run: |
-          which go
-          go version
-          go env
-
       - name: Build rclone + generate Entware .ipk (armv7sf-k3.2)
         shell: bash
         run: |
           set -euo pipefail
+
           mkdir -p build
 
           # Build static rclone binary for Entware (ARMv7)
@@ -63,13 +57,10 @@ jobs:
           PKGROOT="$(mktemp -d)"
           mkdir -p "${PKGROOT}/CONTROL" "${PKGROOT}/opt/bin"
 
-          # Entware install location
           install -m 0755 build/rclone "${PKGROOT}/opt/bin/rclone"
-
-          # Installed size in KB
           INSTALLED_SIZE_KB="$(du -sk "${PKGROOT}/opt" | awk '{print $1}')"
 
-          # IMPORTANT: no leading spaces in control file lines
+          # IMPORTANT: no leading spaces in the control file lines
           cat > "${PKGROOT}/CONTROL/control" <<EOF
 Package: ${PKG}
 Version: ${VER}
@@ -82,7 +73,6 @@ Description: rclone - rsync for cloud storage
  Rclone syncs files to and from cloud storage providers.
 EOF
 
-          # Optional postinst
           cat > "${PKGROOT}/CONTROL/postinst" <<'EOF'
 #!/bin/sh
 set -e
@@ -90,16 +80,18 @@ exit 0
 EOF
           chmod 0755 "${PKGROOT}/CONTROL/postinst"
 
-          # Stage the 3 required ipk members with correct names
+          # Stage the required ipk members with correct filenames
           STAGE="$(mktemp -d)"
           echo "2.0" > "${STAGE}/debian-binary"
           ( cd "${PKGROOT}/CONTROL" && tar -czf "${STAGE}/control.tar.gz" . )
           ( cd "${PKGROOT}" && tar -czf "${STAGE}/data.tar.gz" opt )
 
-          # Build the .ipk (ar archive) with EXACT member names
-          ( cd "${STAGE}" && ar r "${GITHUB_WORKSPACE}/${OUT_IPK}" debian-binary control.tar.gz data.tar.gz )
+          # Build .ipk as an ar archive with EXACT member names
+          rm -f "${OUT_IPK}"
+          ( cd "${STAGE}" && ar r "$(pwd)/../ipk.tmp" debian-binary control.tar.gz data.tar.gz )
+          mv "$(pwd)/ipk.tmp" "${OUT_IPK}"
 
-          echo "Built IPK:"
+          echo "Built:"
           ls -lah build/
           echo "IPK contents:"
           ar t "${OUT_IPK}"
@@ -114,7 +106,7 @@ EOF
   release:
     name: Create Release (attach IPK)
     runs-on: ubuntu-latest
-    needs: [build_entware_ipk]
+    needs: build_entware_ipk
     timeout-minutes: 15
 
     steps:
@@ -145,10 +137,8 @@ EOF
           FILE="$(ls -1 build/*.ipk | head -n 1)"
 
           if gh release view "${TAG}" >/dev/null 2>&1; then
-            echo "Release ${TAG} already exists. Uploading asset..."
             gh release upload "${TAG}" "${FILE}" --clobber
           else
-            echo "Creating release ${TAG}..."
             gh release create "${TAG}" \
               --title "rclone ${TAG} (Entware IPK armv7sf-k3.2)" \
               --notes "Entware installable .ipk for ASUS Merlin (armv7sf-k3.2)." \
