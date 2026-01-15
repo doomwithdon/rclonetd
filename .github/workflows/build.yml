@@ -27,12 +27,22 @@ jobs:
           go-version: ">=1.23.0"
           check-latest: true
 
-      - name: Install packaging tools
+      - name: Install packaging dependencies
         shell: bash
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y opkg-utils
+          # perl + core utils for opkg-build script
+          sudo apt-get install -y git perl tar gzip xz-utils
+
+      - name: Fetch opkg-build (opkg-utils) from source
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/opkg-utils
+          git clone --depth 1 https://github.com/seife/opkg-utils.git /tmp/opkg-utils
+          chmod +x /tmp/opkg-utils/opkg-build
+          /tmp/opkg-utils/opkg-build --help >/dev/null 2>&1 || true
 
       - name: Build rclone (linux/armv7)
         shell: bash
@@ -40,12 +50,14 @@ jobs:
           set -euo pipefail
           mkdir -p build
 
+          # opkg-friendly version:
+          # - tag builds: tag name
+          # - non-tag builds: no "+" (some tooling can be weird about it)
           if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
             VER="${GITHUB_REF_NAME}"
           else
             VER="0.0.0-git${GITHUB_SHA:0:7}"
           fi
-
           echo "VER=${VER}" >> "$GITHUB_ENV"
 
           export GOOS=linux
@@ -59,23 +71,21 @@ jobs:
 
           chmod +x build/rclone
 
-      - name: Package as Entware IPK (opkg-build)
+      - name: Package as Entware IPK (armv7-3.2) using opkg-build
         shell: bash
         run: |
           set -euo pipefail
 
           PKG="rclone"
           ARCH="armv7-3.2"
-          OUTDIR="build"
 
           PKGDIR="$(mktemp -d)"
           mkdir -p "${PKGDIR}/CONTROL" "${PKGDIR}/opt/bin"
 
           install -m 0755 build/rclone "${PKGDIR}/opt/bin/rclone"
-
           INSTALLED_SIZE_KB="$(du -sk "${PKGDIR}/opt" | awk '{print $1}')"
 
-          # CONTROL/control (no heredoc to keep YAML safe)
+          # CONTROL/control (Entware/opkg expects this)
           printf '%s\n' \
             "Package: ${PKG}" \
             "Version: ${VER}" \
@@ -88,7 +98,7 @@ jobs:
             " Rclone syncs files to and from cloud storage providers." \
             > "${PKGDIR}/CONTROL/control"
 
-          # CONTROL/postinst
+          # Minimal postinst
           printf '%s\n' \
             "#!/bin/sh" \
             "set -e" \
@@ -96,11 +106,11 @@ jobs:
             > "${PKGDIR}/CONTROL/postinst"
           chmod 0755 "${PKGDIR}/CONTROL/postinst"
 
-          mkdir -p "${OUTDIR}"
-          opkg-build -o root -g root "${PKGDIR}" "${OUTDIR}"
+          # Build ipk into build/
+          /tmp/opkg-utils/opkg-build "${PKGDIR}" build
 
           echo "Built IPKs:"
-          ls -lah "${OUTDIR}"/*.ipk
+          ls -lah build/*.ipk
 
       - name: Upload IPK Artifact
         uses: actions/upload-artifact@v4
