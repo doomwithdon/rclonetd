@@ -1,9 +1,8 @@
 name: Rclone Build
 
 on:
+  workflow_dispatch:
   push:
-    tags:
-      - "**"
 
 env:
   IMAGE: tgdrive/rclone
