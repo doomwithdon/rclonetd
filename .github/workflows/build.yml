@@ -32,15 +32,17 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y git perl tar gzip xz-utils
+          sudo apt-get install -y perl tar gzip xz-utils curl
 
-      - name: Fetch opkg-build (OpenWrt opkg-utils)
+      - name: Fetch opkg-build script (no git clone)
         shell: bash
         run: |
           set -euo pipefail
-          rm -rf /tmp/opkg-utils
-          git clone --depth 1 https://github.com/openwrt/opkg-utils.git /tmp/opkg-utils
+          mkdir -p /tmp/opkg-utils
+          curl -fsSL -o /tmp/opkg-utils/opkg-build \
+            https://raw.githubusercontent.com/openwrt/opkg-utils/master/opkg-build
           chmod +x /tmp/opkg-utils/opkg-build
+          /tmp/opkg-utils/opkg-build --help >/dev/null 2>&1 || true
 
       - name: Build rclone (linux/armv7)
         shell: bash
@@ -92,7 +94,6 @@ jobs:
             "Installed-Size: ${INSTALLED_SIZE_KB}" \
             "Description: rclone - rsync for cloud storage" \
             " Rclone syncs files to and from cloud storage providers." \
-            " Built for ASUS Merlin Entware (armv7-3.2)." \
             > "${PKGDIR}/CONTROL/control"
 
           printf '%s\n' \
@@ -105,6 +106,7 @@ jobs:
           echo "PKGDIR=${PKGDIR}"
           find "${PKGDIR}" -maxdepth 3 -print
 
+          # root ownership avoids UID warnings
           sudo chown -R 0:0 "${PKGDIR}"
 
           mkdir -p build
