@@ -14,19 +14,24 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        job_name: ["linux", "windows"]
+        job_name:
+          - linux
+          - windows
+          - mac_amd64
+          - mac_arm64
+          - asus_merlin_entware_armv7
 
         include:
           - job_name: linux
             os: ubuntu-latest
-            go: ">=1.24.0-rc.1"
+            go: ">=1.23.0"
             gotags: cmount
             cgo: "0"
             build_flags: '-include "^(linux/amd64|linux/arm64|linux/arm-v7)"'
 
           - job_name: windows
             os: windows-latest
-            go: ">=1.24.0-rc.1"
+            go: ">=1.23.0"
             gotags: cmount
             cgo: "0"
             build_flags: '-include "^(windows/amd64|windows/arm64)"'
@@ -34,18 +39,24 @@ jobs:
 
           - job_name: mac_amd64
             os: macos-latest
-            go: ">=1.23.0-rc.1"
+            go: ">=1.23.0"
             gotags: "cmount"
             build_flags: '-include "^darwin/amd64" -cgo'
 
           - job_name: mac_arm64
             os: macos-latest
-            go: ">=1.23.0-rc.1"
+            go: ">=1.23.0"
             gotags: "cmount"
             build_flags: '-include "^darwin/arm64" -cgo -macos-arch arm64 -cgo-cflags=-I/usr/local/include -cgo-ldflags=-L/usr/local/lib'
 
-    name: ${{ matrix.job_name }}
+          # ✅ NEW: ASUS XT8 Merlin Entware ARMv7 build
+          - job_name: asus_merlin_entware_armv7
+            os: ubuntu-latest
+            go: ">=1.23.0"
+            gotags: ""
+            cgo: "0"
 
+    name: ${{ matrix.job_name }}
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -76,13 +87,11 @@ jobs:
           sudo chown root:$USER /etc/fuse.conf
           sudo apt-get update
           sudo apt-get install -y fuse3 libfuse-dev rpm pkg-config git-annex git-annex-remote-rclone nfs-common
-        if: matrix.os == 'ubuntu-latest'
+        if: matrix.os == 'ubuntu-latest' && matrix.job_name != 'asus_merlin_entware_armv7'
 
       - name: Install Libraries on macOS
         shell: bash
         run: |
-          # https://github.com/Homebrew/brew/issues/15621#issuecomment-1619266788
-          # https://github.com/orgs/Homebrew/discussions/4612#discussioncomment-6319008
           unset HOMEBREW_NO_INSTALL_FROM_API
           brew untap --force homebrew/core
           brew untap --force homebrew/cask
@@ -102,8 +111,6 @@ jobs:
             choco install -y mingw --forcex86 --force
             echo "C:\\ProgramData\\chocolatey\\lib\\mingw\\tools\\install\\mingw32\\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           }
-          # Copy mingw32-make.exe to make.exe so the same command line
-          # can be used on Windows as on macOS and Linux
           $path = (get-command mingw32-make.exe).Path
           Copy-Item -Path $path -Destination (Join-Path (Split-Path -Path $path) 'make.exe')
         if: matrix.os == 'windows-latest'
@@ -115,16 +122,36 @@ jobs:
           printf "Go version: $(go version)\n"
           printf "\n\nGo environment:\n\n"
           go env
-          printf "\n\nRclone environment:\n\n"
-          make vars
           printf "\n\nSystem environment:\n\n"
           env
 
-      - name: Build rclone
+      # ✅ Default build (existing cross builds)
+      - name: Build rclone (default matrix builds)
         shell: bash
         run: |
           if [[ "${{ matrix.os }}" == "ubuntu-latest" ]]; then make release_dep_linux ; fi
           make cross
+        if: matrix.job_name != 'asus_merlin_entware_armv7'
+
+      # ✅ NEW: Entware binary build for Asus XT8 (ARMv7)
+      - name: Build rclone for ASUS Merlin Entware (ARMv7)
+        shell: bash
+        run: |
+          mkdir -p build
+          export GOOS=linux
+          export GOARCH=arm
+          export GOARM=7
+          export CGO_ENABLED=0
+
+          # Build a single Entware-friendly static binary
+          go build -v -trimpath \
+            -ldflags "-s -w -X github.com/rclone/rclone/fs.Version=${{ github.ref_name }}" \
+            -o build/rclone-linux-armv7-entware .
+
+          # Optional: show binary info
+          file build/rclone-linux-armv7-entware || true
+          ls -lah build/
+        if: matrix.job_name == 'asus_merlin_entware_armv7'
 
       - name: Upload Binary
         uses: actions/upload-artifact@v4
@@ -142,10 +169,11 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
+
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: ">=1.24.0-rc.1"
+          go-version: ">=1.23.0"
 
       - name: Go module cache
         uses: actions/cache@v4
@@ -187,7 +215,7 @@ jobs:
     needs: [build, android]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
