@@ -78,7 +78,7 @@ jobs:
           ARCH="armv7-3.2"
           SOURCE_URL="https://github.com/${GITHUB_REPOSITORY}"
 
-          # Build package directory inside workspace (avoids /tmp root-only perms issues)
+          # Build package directory inside workspace (avoids /tmp perms issues)
           PKGDIR="${GITHUB_WORKSPACE}/_pkg"
           rm -rf "${PKGDIR}"
           mkdir -p "${PKGDIR}/CONTROL" "${PKGDIR}/opt/bin"
@@ -110,7 +110,7 @@ jobs:
           echo "PKGDIR=${PKGDIR}"
           find "${PKGDIR}" -maxdepth 3 -print
 
-          # Make opkg-build happy about UID/GID, but keep readable for subsequent steps
+          # Make opkg-build happy about UID/GID, but keep readable
           sudo chown -R 0:0 "${PKGDIR}"
           sudo chmod 0755 "${PKGDIR}"
           sudo chmod -R a+rX "${PKGDIR}"
@@ -118,8 +118,12 @@ jobs:
           echo "PKGDIR (after chown):"
           sudo find "${PKGDIR}" -maxdepth 3 -print
 
+          # Build into a real temp output dir to avoid opkg-build scratch-dir bugs
+          OUTDIR="$(mktemp -d)"
+          /tmp/opkg-utils/opkg-build "${PKGDIR}" "${OUTDIR}"
+
           mkdir -p build
-          /tmp/opkg-utils/opkg-build "${PKGDIR}" build
+          mv -f "${OUTDIR}"/*.ipk build/
 
           echo "Built IPKs:"
           ls -lah build/*.ipk
