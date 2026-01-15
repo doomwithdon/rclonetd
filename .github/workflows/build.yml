@@ -32,7 +32,6 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          # perl + core utils for opkg-build script
           sudo apt-get install -y git perl tar gzip xz-utils
 
       - name: Fetch opkg-build (opkg-utils) from source
@@ -42,7 +41,6 @@ jobs:
           rm -rf /tmp/opkg-utils
           git clone --depth 1 https://github.com/seife/opkg-utils.git /tmp/opkg-utils
           chmod +x /tmp/opkg-utils/opkg-build
-          /tmp/opkg-utils/opkg-build --help >/dev/null 2>&1 || true
 
       - name: Build rclone (linux/armv7)
         shell: bash
@@ -50,9 +48,6 @@ jobs:
           set -euo pipefail
           mkdir -p build
 
-          # opkg-friendly version:
-          # - tag builds: tag name
-          # - non-tag builds: no "+" (some tooling can be weird about it)
           if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
             VER="${GITHUB_REF_NAME}"
           else
@@ -79,13 +74,18 @@ jobs:
           PKG="rclone"
           ARCH="armv7-3.2"
 
+          # Pick a Source value opkg-build will accept (URL is fine)
+          # Use your repo URL if present; otherwise fall back to upstream rclone.
+          REPO_URL="https://github.com/${GITHUB_REPOSITORY}"
+          SOURCE_URL="${REPO_URL}"
+
           PKGDIR="$(mktemp -d)"
           mkdir -p "${PKGDIR}/CONTROL" "${PKGDIR}/opt/bin"
 
           install -m 0755 build/rclone "${PKGDIR}/opt/bin/rclone"
+
           INSTALLED_SIZE_KB="$(du -sk "${PKGDIR}/opt" | awk '{print $1}')"
 
-          # CONTROL/control (Entware/opkg expects this)
           printf '%s\n' \
             "Package: ${PKG}" \
             "Version: ${VER}" \
@@ -93,18 +93,21 @@ jobs:
             "Maintainer: doomwithdon" \
             "Section: utils" \
             "Priority: optional" \
+            "Source: ${SOURCE_URL}" \
             "Installed-Size: ${INSTALLED_SIZE_KB}" \
             "Description: rclone - rsync for cloud storage" \
             " Rclone syncs files to and from cloud storage providers." \
             > "${PKGDIR}/CONTROL/control"
 
-          # Minimal postinst
           printf '%s\n' \
             "#!/bin/sh" \
             "set -e" \
             "exit 0" \
             > "${PKGDIR}/CONTROL/postinst"
           chmod 0755 "${PKGDIR}/CONTROL/postinst"
+
+          # Force root ownership to avoid UID>99 warnings and improve compatibility
+          sudo chown -R 0:0 "${PKGDIR}"
 
           # Build ipk into build/
           /tmp/opkg-utils/opkg-build "${PKGDIR}" build
