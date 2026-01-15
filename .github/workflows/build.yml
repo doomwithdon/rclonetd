@@ -40,7 +40,7 @@ jobs:
           set -euo pipefail
           mkdir -p /tmp/opkg-utils
           curl -fsSL -o /tmp/opkg-utils/opkg-build \
-            https://raw.githubusercontent.com/openwrt/opkg-utils/master/opkg-build
+            https://raw.githubusercontent.com/shr-project/opkg-utils/master/opkg-build
           chmod +x /tmp/opkg-utils/opkg-build
           /tmp/opkg-utils/opkg-build --help >/dev/null 2>&1 || true
 
@@ -50,6 +50,7 @@ jobs:
           set -euo pipefail
           mkdir -p build
 
+          # opkg-friendly version (no "+")
           if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
             VER="${GITHUB_REF_NAME}"
           else
@@ -94,6 +95,7 @@ jobs:
             "Installed-Size: ${INSTALLED_SIZE_KB}" \
             "Description: rclone - rsync for cloud storage" \
             " Rclone syncs files to and from cloud storage providers." \
+            " Built for ASUS Merlin Entware (armv7-3.2)." \
             > "${PKGDIR}/CONTROL/control"
 
           printf '%s\n' \
@@ -103,11 +105,11 @@ jobs:
             > "${PKGDIR}/CONTROL/postinst"
           chmod 0755 "${PKGDIR}/CONTROL/postinst"
 
+          # Make opkg-build happy about UID/GID
+          sudo chown -R 0:0 "${PKGDIR}"
+
           echo "PKGDIR=${PKGDIR}"
           find "${PKGDIR}" -maxdepth 3 -print
-
-          # root ownership avoids UID warnings
-          sudo chown -R 0:0 "${PKGDIR}"
 
           mkdir -p build
           /tmp/opkg-utils/opkg-build "${PKGDIR}" build
