@@ -38,7 +38,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           mkdir -p build
 
           # Build static rclone binary for Entware (ARMv7)
@@ -47,74 +46,63 @@ jobs:
           export GOARM=7
           export CGO_ENABLED=0
 
-          BIN_OUT="build/rclone"
           go build -v -trimpath \
             -ldflags "-s -w -X github.com/rclone/rclone/fs.Version=${{ github.ref_name }}" \
-            -o "${BIN_OUT}" .
+            -o build/rclone .
 
-          chmod +x "${BIN_OUT}"
+          chmod +x build/rclone
 
           # ---------------------------
           # Package into an Entware .ipk
           # ---------------------------
           PKG="rclone"
           VER="${{ github.ref_name }}"
-          ARCH="armv7sf-k3.2"   # per your request
+          ARCH="armv7sf-k3.2"
+          OUT_IPK="build/${PKG}_${VER}_${ARCH}.ipk"
 
           PKGROOT="$(mktemp -d)"
-          mkdir -p "${PKGROOT}/CONTROL"
-          mkdir -p "${PKGROOT}/opt/bin"
+          mkdir -p "${PKGROOT}/CONTROL" "${PKGROOT}/opt/bin"
 
-          # Install path for Entware
-          install -m 0755 "${BIN_OUT}" "${PKGROOT}/opt/bin/rclone"
+          # Entware install location
+          install -m 0755 build/rclone "${PKGROOT}/opt/bin/rclone"
 
           # Installed size in KB
           INSTALLED_SIZE_KB="$(du -sk "${PKGROOT}/opt" | awk '{print $1}')"
 
-          # Control metadata
+          # IMPORTANT: no leading spaces in control file lines
           cat > "${PKGROOT}/CONTROL/control" <<EOF
-          Package: ${PKG}
-          Version: ${VER}
-          Architecture: ${ARCH}
-          Maintainer: doomwithdon
-          Section: utils
-          Priority: optional
-          Installed-Size: ${INSTALLED_SIZE_KB}
-          Description: rclone - rsync for cloud storage
-           Rclone syncs files to and from cloud storage providers.
-          EOF
+Package: ${PKG}
+Version: ${VER}
+Architecture: ${ARCH}
+Maintainer: doomwithdon
+Section: utils
+Priority: optional
+Installed-Size: ${INSTALLED_SIZE_KB}
+Description: rclone - rsync for cloud storage
+ Rclone syncs files to and from cloud storage providers.
+EOF
 
-          # Minimal postinst (optional)
+          # Optional postinst
           cat > "${PKGROOT}/CONTROL/postinst" <<'EOF'
-          #!/bin/sh
-          set -e
-          if [ -x /opt/bin/rclone ]; then
-            /opt/bin/rclone version >/dev/null 2>&1 || true
-          fi
-          exit 0
-          EOF
+#!/bin/sh
+set -e
+exit 0
+EOF
           chmod 0755 "${PKGROOT}/CONTROL/postinst"
 
-          # debian-binary required by .ipk format
-          echo "2.0" > "${PKGROOT}/debian-binary"
+          # Stage the 3 required ipk members with correct names
+          STAGE="$(mktemp -d)"
+          echo "2.0" > "${STAGE}/debian-binary"
+          ( cd "${PKGROOT}/CONTROL" && tar -czf "${STAGE}/control.tar.gz" . )
+          ( cd "${PKGROOT}" && tar -czf "${STAGE}/data.tar.gz" opt )
 
-          # control.tar.gz must contain control files at archive root
-          ( cd "${PKGROOT}/CONTROL" && tar -czf "${PKGROOT}/control.tar.gz" . )
+          # Build the .ipk (ar archive) with EXACT member names
+          ( cd "${STAGE}" && ar r "${GITHUB_WORKSPACE}/${OUT_IPK}" debian-binary control.tar.gz data.tar.gz )
 
-          # data.tar.gz must contain opt/... at archive root
-          ( cd "${PKGROOT}" && tar -czf "${PKGROOT}/data.tar.gz" opt )
-
-          OUT_IPK="build/${PKG}_${VER}_${ARCH}.ipk"
-
-          # .ipk is an ar archive of the three parts
-          ar r "${OUT_IPK}" \
-            "${PKGROOT}/debian-binary" \
-            "${PKGROOT}/control.tar.gz" \
-            "${PKGROOT}/data.tar.gz"
-
-          echo "Built:"
+          echo "Built IPK:"
           ls -lah build/
-          file "${OUT_IPK}" || true
+          echo "IPK contents:"
+          ar t "${OUT_IPK}"
 
       - name: Upload IPK Artifact
         uses: actions/upload-artifact@v4
@@ -156,7 +144,6 @@ jobs:
           TAG="${{ github.ref_name }}"
           FILE="$(ls -1 build/*.ipk | head -n 1)"
 
-          # Create release if it doesn't exist, otherwise just upload asset(s)
           if gh release view "${TAG}" >/dev/null 2>&1; then
             echo "Release ${TAG} already exists. Uploading asset..."
             gh release upload "${TAG}" "${FILE}" --clobber
