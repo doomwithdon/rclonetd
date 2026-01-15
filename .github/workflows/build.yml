@@ -34,12 +34,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y git perl tar gzip xz-utils
 
-      - name: Fetch opkg-build (opkg-utils) from source
+      - name: Fetch opkg-build (OpenWrt opkg-utils)
         shell: bash
         run: |
           set -euo pipefail
           rm -rf /tmp/opkg-utils
-          git clone --depth 1 https://github.com/seife/opkg-utils.git /tmp/opkg-utils
+          git clone --depth 1 https://github.com/openwrt/opkg-utils.git /tmp/opkg-utils
           chmod +x /tmp/opkg-utils/opkg-build
 
       - name: Build rclone (linux/armv7)
@@ -66,24 +66,19 @@ jobs:
 
           chmod +x build/rclone
 
-      - name: Package as Entware IPK (armv7-3.2) using opkg-build
+      - name: Package as Entware IPK (armv7-3.2)
         shell: bash
         run: |
           set -euo pipefail
 
           PKG="rclone"
           ARCH="armv7-3.2"
-
-          # Pick a Source value opkg-build will accept (URL is fine)
-          # Use your repo URL if present; otherwise fall back to upstream rclone.
-          REPO_URL="https://github.com/${GITHUB_REPOSITORY}"
-          SOURCE_URL="${REPO_URL}"
+          SOURCE_URL="https://github.com/${GITHUB_REPOSITORY}"
 
           PKGDIR="$(mktemp -d)"
           mkdir -p "${PKGDIR}/CONTROL" "${PKGDIR}/opt/bin"
 
           install -m 0755 build/rclone "${PKGDIR}/opt/bin/rclone"
-
           INSTALLED_SIZE_KB="$(du -sk "${PKGDIR}/opt" | awk '{print $1}')"
 
           printf '%s\n' \
@@ -97,6 +92,7 @@ jobs:
             "Installed-Size: ${INSTALLED_SIZE_KB}" \
             "Description: rclone - rsync for cloud storage" \
             " Rclone syncs files to and from cloud storage providers." \
+            " Built for ASUS Merlin Entware (armv7-3.2)." \
             > "${PKGDIR}/CONTROL/control"
 
           printf '%s\n' \
@@ -106,10 +102,12 @@ jobs:
             > "${PKGDIR}/CONTROL/postinst"
           chmod 0755 "${PKGDIR}/CONTROL/postinst"
 
-          # Force root ownership to avoid UID>99 warnings and improve compatibility
+          echo "PKGDIR=${PKGDIR}"
+          find "${PKGDIR}" -maxdepth 3 -print
+
           sudo chown -R 0:0 "${PKGDIR}"
 
-          # Build ipk into build/
+          mkdir -p build
           /tmp/opkg-utils/opkg-build "${PKGDIR}" build
 
           echo "Built IPKs:"
