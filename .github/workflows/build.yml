@@ -30,6 +30,7 @@ jobs:
       - name: Install packaging tools
         shell: bash
         run: |
+          set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y opkg-utils
 
@@ -39,14 +40,13 @@ jobs:
           set -euo pipefail
           mkdir -p build
 
-          # Versioning:
-          # - tags: use tag name
-          # - non-tags: use opkg-friendly version (NO "+")
           if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
             VER="${GITHUB_REF_NAME}"
           else
             VER="0.0.0-git${GITHUB_SHA:0:7}"
           fi
+
+          echo "VER=${VER}" >> "$GITHUB_ENV"
 
           export GOOS=linux
           export GOARCH=arm
@@ -59,53 +59,48 @@ jobs:
 
           chmod +x build/rclone
 
-          echo "VER=${VER}" >> "$GITHUB_ENV"
-
-      - name: Package as Entware IPK using opkg-build
+      - name: Package as Entware IPK (opkg-build)
         shell: bash
         run: |
           set -euo pipefail
 
           PKG="rclone"
           ARCH="armv7-3.2"
-          VER="${VER}"
+          OUTDIR="build"
 
           PKGDIR="$(mktemp -d)"
           mkdir -p "${PKGDIR}/CONTROL" "${PKGDIR}/opt/bin"
 
-          # Install payload
           install -m 0755 build/rclone "${PKGDIR}/opt/bin/rclone"
 
-          # Installed size in KB (Entware/opkg expects KB)
           INSTALLED_SIZE_KB="$(du -sk "${PKGDIR}/opt" | awk '{print $1}')"
 
-          # CONTROL/control (Entware-style)
-          cat > "${PKGDIR}/CONTROL/control" <<EOF
-Package: ${PKG}
-Version: ${VER}
-Architecture: ${ARCH}
-Maintainer: doomwithdon
-Section: utils
-Priority: optional
-Installed-Size: ${INSTALLED_SIZE_KB}
-Description: rclone - rsync for cloud storage
- Rclone syncs files to and from cloud storage providers.
-EOF
+          # CONTROL/control (no heredoc to keep YAML safe)
+          printf '%s\n' \
+            "Package: ${PKG}" \
+            "Version: ${VER}" \
+            "Architecture: ${ARCH}" \
+            "Maintainer: doomwithdon" \
+            "Section: utils" \
+            "Priority: optional" \
+            "Installed-Size: ${INSTALLED_SIZE_KB}" \
+            "Description: rclone - rsync for cloud storage" \
+            " Rclone syncs files to and from cloud storage providers." \
+            > "${PKGDIR}/CONTROL/control"
 
-          # Minimal postinst
-          cat > "${PKGDIR}/CONTROL/postinst" <<'EOF'
-#!/bin/sh
-set -e
-exit 0
-EOF
+          # CONTROL/postinst
+          printf '%s\n' \
+            "#!/bin/sh" \
+            "set -e" \
+            "exit 0" \
+            > "${PKGDIR}/CONTROL/postinst"
           chmod 0755 "${PKGDIR}/CONTROL/postinst"
 
-          # Build ipk to ./build using opkg-build (canonical format)
-          mkdir -p build
-          opkg-build -o root -g root "${PKGDIR}" build
+          mkdir -p "${OUTDIR}"
+          opkg-build -o root -g root "${PKGDIR}" "${OUTDIR}"
 
           echo "Built IPKs:"
-          ls -lah build/*.ipk
+          ls -lah "${OUTDIR}"/*.ipk
 
       - name: Upload IPK Artifact
         uses: actions/upload-artifact@v4
