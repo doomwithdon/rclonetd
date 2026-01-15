@@ -202,12 +202,8 @@ upload:
 	rclone -P copy build/ downloads.rclone.org:/$(TAG)
 	rclone lsf build --files-only --include '*.{zip,deb,rpm}' --include version.txt | xargs -i bash -c 'i={}; j="$$i"; [[ $$i =~ (.*)(-v[0-9\.]+-)(.*) ]] && j=$${BASH_REMATCH[1]}-current-$${BASH_REMATCH[3]}; rclone copyto -v "downloads.rclone.org:/$(TAG)/$$i" "downloads.rclone.org:/$$j"'
 
-GITHUB_REPO ?= $(GITHUB_REPOSITORY)
-GITHUB_REPO ?= doomwithdon/rclonetd
-
 upload_github:
-	@echo "Uploading release to $(GITHUB_REPO)"
-	./bin/upload-github "$(VERSION)" -repo "$(GITHUB_REPO)"
+	./bin/upload-github $(TAG)
 
 cross:
 	go run bin/cross-compile.go $(BUILD_FLAGS) $(BUILDTAGS) $(BUILD_ARGS) $(TAG)
