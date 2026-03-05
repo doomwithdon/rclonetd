@@ -2,11 +2,12 @@ name: Build Entware arm7-3.2 rclone
 
 on:
   push:
-    tags:
-      - "*"
+    branches:
+      - "**"
+  workflow_dispatch:
 
 permissions:
-  contents: write  # allow creating a release + uploading assets
+  contents: write
 
 jobs:
   build-entware:
@@ -17,45 +18,41 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: Set up Go
+      - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: ">=1.24.0-rc.1"
+          go-version: ">=1.24"
           check-latest: true
 
-      - name: Build rclone (linux/arm GOARM=7)
+      - name: Build rclone (size-reduced)
         shell: bash
         run: |
           set -euo pipefail
 
-          # Entware arm7-3.2 target => Linux ARMv7 hard-float style target via GOARM=7
+          # Entware arm7-3.2 => Linux ARMv7
           export GOOS=linux
           export GOARCH=arm
           export GOARM=7
           export CGO_ENABLED=0
 
-          ver="${GITHUB_REF_NAME}"
           mkdir -p build
 
-          go version
-          go env
-
-          # If you don't want cmount support on Entware, remove: -tags "cmount"
+          # Build a small binary: strip symbols/debug + remove buildid + trim paths
           go build -v -trimpath \
             -tags "cmount" \
-            -ldflags "-s -w -X github.com/rclone/rclone/fs.Version=${ver}" \
+            -ldflags "-s -w -buildid=" \
             -o build/rclone .
 
-          (cd build && zip -9 "rclone-${ver}-entware-arm7-3.2.zip" rclone)
+          # Package
+          cd build
+          zip -9 rclone-entware-arm7-3.2.zip rclone
 
       - name: Create/Update GitHub Release and upload asset
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
-          name: ${{ github.ref_name }}
-          files: build/rclone-${{ github.ref_name }}-entware-arm7-3.2.zip
+          tag_name: latest
+          name: Latest Build
+          files: build/rclone-entware-arm7-3.2.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
