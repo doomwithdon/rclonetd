@@ -1,6 +1,7 @@
 This command downloads the latest release of rclone and replaces the
-currently running binary. The download is verified with a hashsum and
-cryptographically signed signature; see [the release signing
+currently running binary. In this fork, releases are fetched from the
+tgdrive/rclone GitHub repository. The download is verified with a hashsum and
+cryptographically signed signature when available; see [the release signing
 docs](/release_signing/) for details.
 
 If used without flags (or with implied `--stable` flag), this command

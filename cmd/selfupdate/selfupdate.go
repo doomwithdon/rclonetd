@@ -11,6 +11,7 @@ import (
 	"crypto/sha256"
 	_ "embed"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -104,45 +105,64 @@ var cmdSelfUpdate = &cobra.Command{
 // or find the latest micro release for a given major.minor release.
 // Note: this will not be applied to beta releases.
 func GetVersion(ctx context.Context, beta bool, version string) (newVersion, siteURL string, err error) {
-	siteURL = "https://downloads.rclone.org"
-	if beta {
-		siteURL = "https://beta.rclone.org"
-	}
+	// Switch selfupdate source to the fork repo on GitHub
+	// We construct download URLs like:
+	//   https://github.com/tgdrive/rclone/releases/download/<tag>/<archive>
+	siteURL = "https://github.com/tgdrive/rclone/releases/download"
 
 	if version == "" {
-		// Request the latest release number from the download site
-		_, newVersion, _, err = versionCmd.GetVersion(ctx, siteURL+"/version.txt")
-		return
+		// Query GitHub Releases API for tgdrive/rclone
+		apiURL := "https://api.github.com/repos/tgdrive/rclone/releases"
+		body, derr := downloadFile(ctx, apiURL)
+		if derr != nil {
+			return "", siteURL, fmt.Errorf("failed to query GitHub releases: %w", derr)
+		}
+		// Minimal struct for the fields we need
+		var releases []struct {
+			TagName    string `json:"tag_name"`
+			Draft      bool   `json:"draft"`
+			Prerelease bool   `json:"prerelease"`
+		}
+		if err = json.Unmarshal(body, &releases); err != nil {
+			return "", siteURL, fmt.Errorf("failed to parse GitHub releases: %w", err)
+		}
+		// Pick latest matching release
+		for _, r := range releases {
+			if r.Draft {
+				continue
+			}
+			if beta {
+				if r.Prerelease {
+					newVersion = r.TagName
+					break
+				}
+			} else {
+				if !r.Prerelease {
+					newVersion = r.TagName
+					break
+				}
+			}
+		}
+		if newVersion == "" && len(releases) > 0 {
+			// Fallback to the very first release if no matching prerelease/non-prerelease was found
+			newVersion = releases[0].TagName
+		}
+		if newVersion == "" {
+			return "", siteURL, errors.New("no releases found in tgdrive/rclone")
+		}
+		return newVersion, siteURL, nil
 	}
 
+	// Explicit version requested, normalize to semantic tag format
 	newVersion = version
 	if version[0] != 'v' {
 		newVersion = "v" + version
 	}
-	if beta {
-		return
-	}
-
-	if valid, _ := regexp.MatchString(`^v\d+\.\d+(\.\d+)?$`, newVersion); !valid {
+	// For the forked repo we skip micro version discovery and use the tag as-is
+	if valid, _ := regexp.MatchString(`^v\d+\.\d+(\.\d+)?(-[0-9A-Za-z\.-]+)?$`, newVersion); !valid {
 		return "", siteURL, errors.New("invalid semantic version")
 	}
-
-	// Find the latest stable micro release
-	if strings.Count(newVersion, ".") == 1 {
-		html, err := downloadFile(ctx, siteURL)
-		if err != nil {
-			return "", siteURL, fmt.Errorf("failed to get list of releases: %w", err)
-		}
-		reSubver := fmt.Sprintf(`href="\./%s\.\d+/"`, regexp.QuoteMeta(newVersion))
-		allSubvers := regexp.MustCompile(reSubver).FindAllString(string(html), -1)
-		if allSubvers == nil {
-			return "", siteURL, errors.New("could not find the minor release")
-		}
-		// Use the fact that releases in the index are sorted by date
-		lastSubver := allSubvers[len(allSubvers)-1]
-		newVersion = lastSubver[8 : len(lastSubver)-2]
-	}
-	return
+	return newVersion, siteURL, nil
 }
 
 // InstallUpdate performs rclone self-update
@@ -374,8 +394,10 @@ func downloadUpdate(ctx context.Context, beta bool, version, siteURL, newFile, p
 	strHash := hex.EncodeToString(gotHash[:])
 	fs.Debugf(nil, "downloaded release archive with hashsum %s from %s", strHash, archiveURL)
 
-	// CI/CD does not provide hashsums for beta releases
-	if !beta {
+	// CI/CD does not provide hashsums for beta releases.
+	// Also, GitHub releases for the fork may not ship clearsigned SHA256SUMS,
+	// so skip verification when downloading from GitHub.
+	if !beta && !strings.Contains(siteURL, "github.com") {
 		if err := verifyHashsum(ctx, siteURL, version, archiveFilename, gotHash[:]); err != nil {
 			return err
 		}
